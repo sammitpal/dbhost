@@ -281,7 +281,7 @@ echo "$(date): MySQL installation completed" >> /var/log/dbhost/install.log
   // -----------------------------
   // Wait until SSM agent is ready
   // -----------------------------
-  async waitForSsmInstance(instanceId, maxAttempts = 40, delayMs = 10000) {
+  async waitForSsmInstance(instanceId, maxAttempts = 5, delayMs = 10000) {
     console.log(`[SSM] Waiting for SSM agent on instance ${instanceId} (max ${maxAttempts} attempts, ${delayMs/1000}s intervals)`);
     let attempt = 0;
     
