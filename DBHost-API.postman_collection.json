@@ -699,6 +699,34 @@
 					"response": []
 				},
 				{
+					"name": "Check Command Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}/command/{{commandId}}/status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}",
+								"command",
+								"{{commandId}}",
+								"status"
+							]
+						},
+						"description": "Quick check of command execution status without full output."
+					},
+					"response": []
+				},
+				{
 					"name": "Get Command Execution Result",
 					"request": {
 						"method": "GET",
@@ -721,7 +749,7 @@
 								"{{commandId}}"
 							]
 						},
-						"description": "Get the result of a previously executed SSM command."
+						"description": "Get the full result of a previously executed SSM command including output and errors."
 					},
 					"response": []
 				},

@@ -84,8 +84,8 @@ router.get('/:instanceId', authenticateToken, async (req, res) => {
       
       const commands = [
         'tail -n 50 /var/log/dbhost/install.log',
-        'tail -n 50 /var/log/messages',
-        'systemctl status postgresql || systemctl status mysqld'
+        'tail -n 50 /var/log/syslog',
+        'systemctl status postgresql || systemctl status mysql'
       ];
 
       const commandResult = await awsService.executeCommand(instanceId, commands);
@@ -102,6 +102,47 @@ router.get('/:instanceId', authenticateToken, async (req, res) => {
     res.status(500).json({
       error: {
         message: error.message || 'Failed to get logs',
+        status: 500
+      }
+    });
+  }
+});
+
+// Check command status (quick check without full results)
+router.get('/:instanceId/command/:commandId/status', authenticateToken, async (req, res) => {
+  try {
+    const { instanceId, commandId } = req.params;
+    
+    const instance = await EC2Instance.findOne({
+      instanceId,
+      userId: req.user._id
+    });
+
+    if (!instance) {
+      return res.status(404).json({
+        error: {
+          message: 'Instance not found',
+          status: 404
+        }
+      });
+    }
+
+    const awsService = getAWSService();
+    const result = await awsService.getCommandResult(commandId, instanceId);
+
+    res.json({
+      commandId,
+      instanceId,
+      status: result.Status,
+      statusMessage: result.StatusMessage,
+      isComplete: result.IsComplete,
+      responseCode: result.ResponseCode
+    });
+  } catch (error) {
+    console.error('Get command status error:', error);
+    res.status(500).json({
+      error: {
+        message: error.message || 'Failed to get command status',
         status: 500
       }
     });
@@ -134,10 +175,13 @@ router.get('/:instanceId/command/:commandId', authenticateToken, async (req, res
       commandId,
       instanceId,
       status: result.Status,
+      statusMessage: result.StatusMessage,
+      isComplete: result.IsComplete,
       output: result.StandardOutputContent,
       error: result.StandardErrorContent,
       executionStartTime: result.ExecutionStartDateTime,
-      executionEndTime: result.ExecutionEndDateTime
+      executionEndTime: result.ExecutionEndDateTime,
+      responseCode: result.ResponseCode
     });
   } catch (error) {
     console.error('Get command result error:', error);
@@ -258,14 +302,14 @@ router.get('/:instanceId/database', authenticateToken, async (req, res) => {
     let commands;
     if (instance.databaseType === 'postgresql') {
       commands = [
-        `tail -n ${lines} /var/lib/pgsql/data/log/postgresql-*.log || echo "No PostgreSQL logs found"`,
+        `tail -n ${lines} /var/log/postgresql/postgresql-*.log || echo "No PostgreSQL logs found"`,
         'systemctl status postgresql',
         'sudo -u postgres psql -c "SELECT * FROM pg_stat_activity;"'
       ];
     } else if (instance.databaseType === 'mysql') {
       commands = [
-        `tail -n ${lines} /var/log/mysqld.log || echo "No MySQL logs found"`,
-        'systemctl status mysqld',
+        `tail -n ${lines} /var/log/mysql/error.log || echo "No MySQL logs found"`,
+        'systemctl status mysql',
         `mysql -u ${instance.masterUsername} -p${instance.masterPassword} -e "SHOW PROCESSLIST;"`
       ];
     }
@@ -313,7 +357,7 @@ router.get('/:instanceId/system', authenticateToken, async (req, res) => {
     const awsService = getAWSService();
     
     const commands = [
-      `tail -n ${lines} /var/log/messages`,
+      `tail -n ${lines} /var/log/syslog`,
       `tail -n ${lines} /var/log/cloud-init-output.log`,
       `tail -n ${lines} /var/log/dbhost/install.log`,
       'df -h',

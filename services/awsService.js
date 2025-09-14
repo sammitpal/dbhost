@@ -84,7 +84,30 @@ echo "$(date): PostgreSQL installation completed" >> /var/log/dbhost/install.log
 `;
     }
 
-    // You can add MySQL support if needed
+    if (databaseType === 'mysql') {
+      return baseScript + ssmScript + `
+echo "$(date): Installing MySQL" >> /var/log/dbhost/install.log
+apt-get update -y
+DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server
+
+systemctl enable mysql
+systemctl start mysql
+
+# Set root password and create application user
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${masterPassword}';"
+mysql -u root -p${masterPassword} -e "CREATE USER '${masterUsername}'@'%' IDENTIFIED BY '${masterPassword}';"
+mysql -u root -p${masterPassword} -e "GRANT ALL PRIVILEGES ON *.* TO '${masterUsername}'@'%' WITH GRANT OPTION;"
+mysql -u root -p${masterPassword} -e "FLUSH PRIVILEGES;"
+
+# Configure MySQL for remote connections
+sed -i "s/bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
+sed -i "s/port.*/port = ${databasePort}/" /etc/mysql/mysql.conf.d/mysqld.cnf
+
+systemctl restart mysql
+echo "$(date): MySQL installation completed" >> /var/log/dbhost/install.log
+`;
+    }
+
     throw new Error(`Unsupported database type: ${databaseType}`);
   }
 
@@ -240,15 +263,47 @@ echo "$(date): PostgreSQL installation completed" >> /var/log/dbhost/install.log
       InstanceIds: [instanceId],
       DocumentName: 'AWS-RunShellScript',
       Parameters: { commands: Array.isArray(commands) ? commands : [commands] },
+      TimeoutSeconds: 120, // 5 minute timeout
+      Comment: `DBHost command execution - ${new Date().toISOString()}`
     });
 
-    return (await this.ssmClient.send(cmd)).Command;
+    const result = await this.ssmClient.send(cmd);
+    console.log(`SSM Command initiated: ${result.Command.CommandId} for instance ${instanceId}`);
+    return result.Command;
   }
 
   async getCommandResult(commandId, instanceId) {
-    return await this.ssmClient.send(
-      new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId })
-    );
+    try {
+      const result = await this.ssmClient.send(
+        new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId })
+      );
+      
+      // Add status information
+      const status = result.Status;
+      const isComplete = ['Success', 'Failed', 'Cancelled', 'TimedOut'].includes(status);
+      
+      return {
+        ...result,
+        IsComplete: isComplete,
+        StatusMessage: this.getStatusMessage(status)
+      };
+    } catch (error) {
+      console.error('Error getting command result:', error);
+      throw error;
+    }
+  }
+
+  getStatusMessage(status) {
+    const statusMessages = {
+      'Pending': 'Command is queued for execution',
+      'InProgress': 'Command is currently executing',
+      'Success': 'Command completed successfully',
+      'Failed': 'Command execution failed',
+      'Cancelled': 'Command was cancelled',
+      'TimedOut': 'Command execution timed out',
+      'Cancelling': 'Command is being cancelled'
+    };
+    return statusMessages[status] || `Unknown status: ${status}`;
   }
 
   async getLogs(logGroupName, logStreamName, startTime, endTime) {

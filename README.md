@@ -95,6 +95,15 @@ npm start
 
 **Simple SaaS API**: Users only need to provide database preferences (name, type, credentials). All AWS infrastructure is automatically managed.
 
+### ⚡ Asynchronous Command Execution
+
+Database operations (user creation, deletion, custom commands) are executed asynchronously via AWS SSM to prevent API timeouts:
+
+1. **Immediate Response**: API returns immediately with a `commandId`
+2. **Status Checking**: Use `/api/logs/{instanceId}/command/{commandId}/status` to check progress
+3. **Result Retrieval**: Use `/api/logs/{instanceId}/command/{commandId}` to get full results
+4. **Status Values**: `Pending` → `InProgress` → `Success/Failed/TimedOut`
+
 ### 📋 Postman Collection
 
 A complete Postman collection is provided: `DBHost-API.postman_collection.json`
@@ -438,8 +447,13 @@ GET /api/logs/{instanceId}/command/{commandId}
 Authorization: Bearer <jwt-token>
 ```
 
-**cURL Example:**
+**cURL Examples:**
 ```bash
+# Check command status (quick)
+curl -X GET http://localhost:3000/api/logs/i-1234567890abcdef0/command/12345678-1234-1234-1234-123456789012/status \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+# Get full command results
 curl -X GET http://localhost:3000/api/logs/i-1234567890abcdef0/command/12345678-1234-1234-1234-123456789012 \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```

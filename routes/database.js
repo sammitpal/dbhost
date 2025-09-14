@@ -19,9 +19,9 @@ const getAWSService = () => {
   return new AWSService(accessKeyId, secretAccessKey, region);
 };
 
-// Generate database-specific commands
+// Generate database-specific commands for Ubuntu
 const generateDatabaseCommands = (databaseType, action, params) => {
-  const { username, password, privileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] } = params;
+  const { username, password, privileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], masterPassword } = params;
   
   if (databaseType === 'postgresql') {
     switch (action) {
@@ -41,31 +41,32 @@ const generateDatabaseCommands = (databaseType, action, params) => {
         return [`sudo -u postgres psql -c "SELECT usename, usesuper, usecreatedb FROM pg_user;"`];
     }
   } else if (databaseType === 'mysql') {
+    const rootPassword = masterPassword || process.env.DEFAULT_DB_PASSWORD;
     switch (action) {
       case 'create_user':
         return [
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "CREATE USER '${username}'@'%' IDENTIFIED BY '${password}';"`,
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "GRANT ${privileges.join(', ')} ON *.* TO '${username}'@'%';"`,
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "FLUSH PRIVILEGES;"`
+          `mysql -u root -p${rootPassword} -e "CREATE USER '${username}'@'%' IDENTIFIED BY '${password}';"`,
+          `mysql -u root -p${rootPassword} -e "GRANT ${privileges.join(', ')} ON *.* TO '${username}'@'%';"`,
+          `mysql -u root -p${rootPassword} -e "FLUSH PRIVILEGES;"`
         ];
       case 'delete_user':
         return [
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "DROP USER IF EXISTS '${username}'@'%';"`,
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "FLUSH PRIVILEGES;"`
+          `mysql -u root -p${rootPassword} -e "DROP USER IF EXISTS '${username}'@'%';"`,
+          `mysql -u root -p${rootPassword} -e "FLUSH PRIVILEGES;"`
         ];
       case 'change_password':
         return [
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "ALTER USER '${username}'@'%' IDENTIFIED BY '${password}';"`,
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "FLUSH PRIVILEGES;"`
+          `mysql -u root -p${rootPassword} -e "ALTER USER '${username}'@'%' IDENTIFIED BY '${password}';"`,
+          `mysql -u root -p${rootPassword} -e "FLUSH PRIVILEGES;"`
         ];
       case 'grant_privileges':
         return [
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "GRANT ${privileges.join(', ')} ON *.* TO '${username}'@'%';"`,
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "FLUSH PRIVILEGES;"`
+          `mysql -u root -p${rootPassword} -e "GRANT ${privileges.join(', ')} ON *.* TO '${username}'@'%';"`,
+          `mysql -u root -p${rootPassword} -e "FLUSH PRIVILEGES;"`
         ];
       case 'list_users':
         return [
-          `mysql -u root -p${process.env.DEFAULT_DB_PASSWORD} -e "SELECT User, Host FROM mysql.user;"`
+          `mysql -u root -p${rootPassword} -e "SELECT User, Host FROM mysql.user;"`
         ];
     }
   }
@@ -107,7 +108,8 @@ router.post('/:instanceId/users', authenticateToken, [
     const commands = generateDatabaseCommands(instance.databaseType, 'create_user', {
       username,
       password,
-      privileges: privileges || ['SELECT', 'INSERT', 'UPDATE', 'DELETE']
+      privileges: privileges || ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+      masterPassword: instance.masterPassword
     });
 
     const awsService = getAWSService();
@@ -116,9 +118,10 @@ router.post('/:instanceId/users', authenticateToken, [
     await instance.addDatabaseUser(username, password, privileges);
 
     res.status(201).json({
-      message: 'Database user created successfully',
+      message: 'Database user creation initiated',
       user: { username, privileges: privileges || ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], createdAt: new Date() },
-      commandId: commandResult.CommandId
+      commandId: commandResult.CommandId,
+      note: 'Use GET /api/logs/{instanceId}/command/{commandId} to check execution status'
     });
   } catch (error) {
     console.error('Create database user error:', error);
@@ -167,12 +170,12 @@ router.put('/:instanceId/users/:username', authenticateToken, [
     const awsService = getAWSService();
 
     if (privileges) {
-      commands.push(...generateDatabaseCommands(instance.databaseType, 'grant_privileges', { username, privileges }));
+      commands.push(...generateDatabaseCommands(instance.databaseType, 'grant_privileges', { username, privileges, masterPassword: instance.masterPassword }));
       instance.databaseUsers[userIndex].privileges = privileges;
     }
 
     if (password) {
-      commands.push(...generateDatabaseCommands(instance.databaseType, 'change_password', { username, password }));
+      commands.push(...generateDatabaseCommands(instance.databaseType, 'change_password', { username, password, masterPassword: instance.masterPassword }));
       instance.databaseUsers[userIndex].password = password;
     }
 
@@ -182,9 +185,10 @@ router.put('/:instanceId/users/:username', authenticateToken, [
     await instance.save();
 
     res.json({
-      message: 'Database user updated successfully',
+      message: 'Database user update initiated',
       user: instance.databaseUsers[userIndex],
-      commandId: commandResult ? commandResult.CommandId : null
+      commandId: commandResult ? commandResult.CommandId : null,
+      note: commandResult ? 'Use GET /api/logs/{instanceId}/command/{commandId} to check execution status' : 'No commands executed'
     });
   } catch (error) {
     console.error('Update database user error:', error);
@@ -202,13 +206,17 @@ router.delete('/:instanceId/users/:username', authenticateToken, async (req, res
 
     if (username === instance.masterUsername) return res.status(400).json({ error: { message: 'Cannot delete master database user', status: 400 } });
 
-    const commands = generateDatabaseCommands(instance.databaseType, 'delete_user', { username });
+    const commands = generateDatabaseCommands(instance.databaseType, 'delete_user', { username, masterPassword: instance.masterPassword });
     const awsService = getAWSService();
     const commandResult = await awsService.executeCommand(instanceId, commands);
 
     await instance.removeDatabaseUser(username);
 
-    res.json({ message: 'Database user deleted successfully', commandId: commandResult.CommandId });
+    res.json({ 
+      message: 'Database user deletion initiated', 
+      commandId: commandResult.CommandId,
+      note: 'Use GET /api/logs/{instanceId}/command/{commandId} to check execution status'
+    });
   } catch (error) {
     console.error('Delete database user error:', error);
     res.status(500).json({ error: { message: error.message || 'Failed to delete database user', status: 500 } });
@@ -264,7 +272,12 @@ router.post('/:instanceId/execute', authenticateToken, [
     const awsService = getAWSService();
     const commandResult = await awsService.executeCommand(instanceId, [dbCommand]);
 
-    res.json({ message: 'Command executed successfully', commandId: commandResult.CommandId, command: dbCommand });
+    res.json({ 
+      message: 'Database command execution initiated', 
+      commandId: commandResult.CommandId, 
+      command: dbCommand,
+      note: 'Use GET /api/logs/{instanceId}/command/{commandId} to check execution status and results'
+    });
   } catch (error) {
     console.error('Execute database command error:', error);
     res.status(500).json({ error: { message: error.message || 'Failed to execute database command', status: 500 } });
