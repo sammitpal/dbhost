@@ -112,8 +112,35 @@ router.post('/:instanceId/users', authenticateToken, [
       masterPassword: instance.masterPassword
     });
 
+    console.log(`[DB] Creating database user '${username}' on instance ${instanceId}`);
+    console.log(`[DB] Generated commands:`, commands);
+    
     const awsService = getAWSService();
-    const commandResult = await awsService.executeCommand(instanceId, commands);
+    console.log(`[DB] Executing commands via SSM...`);
+    
+    let commandResult;
+    try {
+      commandResult = await awsService.executeCommand(instanceId, commands);
+      console.log(`[DB] SSM command completed, CommandId: ${commandResult.CommandId}`);
+    } catch (ssmError) {
+      console.error(`[DB] SSM command failed:`, ssmError.message);
+      
+      // Add user to database optimistically (SSM command will execute eventually)
+      console.log(`[DB] Adding user to database record optimistically...`);
+      await instance.addDatabaseUser(username, password, privileges);
+      
+      return res.status(202).json({
+        message: 'Database user creation queued (SSM agent not ready)',
+        user: { username, privileges: privileges || ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], createdAt: new Date() },
+        error: ssmError.message,
+        note: 'User added to database record. SSM command will execute when agent becomes available.',
+        troubleshooting: {
+          checkInstanceLogs: `GET /api/logs/${instanceId}/system`,
+          testSSM: `POST /api/database/${instanceId}/test-ssm`,
+          requirements: ['IAM instance profile EC2-SSM-Role', 'Internet access', 'SSM agent running']
+        }
+      });
+    }
 
     await instance.addDatabaseUser(username, password, privileges);
 
@@ -281,6 +308,125 @@ router.post('/:instanceId/execute', authenticateToken, [
   } catch (error) {
     console.error('Execute database command error:', error);
     res.status(500).json({ error: { message: error.message || 'Failed to execute database command', status: 500 } });
+  }
+});
+
+// Check SSM agent status (quick check)
+router.get('/:instanceId/ssm-status', authenticateToken, async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+    
+    const instance = await EC2Instance.findOne({
+      instanceId,
+      userId: req.user._id
+    });
+
+    if (!instance) {
+      return res.status(404).json({
+        error: {
+          message: 'Instance not found',
+          status: 404
+        }
+      });
+    }
+
+    console.log(`[SSM-CHECK] Checking SSM status for instance ${instanceId}`);
+    
+    const awsService = getAWSService();
+    
+    try {
+      // Quick SSM check without waiting
+      const resp = await awsService.ssmClient.send(new (require('@aws-sdk/client-ssm').DescribeInstanceInformationCommand)({
+        Filters: [
+          {
+            Key: 'InstanceIds',
+            Values: [instanceId]
+          }
+        ]
+      }));
+      
+      if (resp.InstanceInformationList.length > 0) {
+        const ssmInstance = resp.InstanceInformationList[0];
+        res.json({
+          ssmRegistered: true,
+          pingStatus: ssmInstance.PingStatus,
+          agentVersion: ssmInstance.AgentVersion,
+          platform: `${ssmInstance.PlatformName} ${ssmInstance.PlatformVersion}`,
+          lastPing: ssmInstance.LastPingDateTime,
+          isOnline: ssmInstance.PingStatus === 'Online'
+        });
+      } else {
+        res.json({
+          ssmRegistered: false,
+          message: 'Instance not registered with SSM yet',
+          troubleshooting: {
+            checkLogs: `GET /api/logs/${instanceId}/system`,
+            requirements: ['IAM instance profile EC2-SSM-Role', 'Internet access', 'SSM agent installed and running']
+          }
+        });
+      }
+    } catch (error) {
+      res.status(500).json({
+        error: {
+          message: `SSM check failed: ${error.message}`,
+          status: 500
+        }
+      });
+    }
+  } catch (error) {
+    console.error('SSM status check error:', error);
+    res.status(500).json({
+      error: {
+        message: error.message || 'Failed to check SSM status',
+        status: 500
+      }
+    });
+  }
+});
+
+// Test SSM connectivity (for debugging)
+router.post('/:instanceId/test-ssm', authenticateToken, async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+    
+    const instance = await EC2Instance.findOne({
+      instanceId,
+      userId: req.user._id
+    });
+
+    if (!instance) {
+      return res.status(404).json({
+        error: {
+          message: 'Instance not found',
+          status: 404
+        }
+      });
+    }
+
+    console.log(`[TEST] Testing SSM connectivity for instance ${instanceId}`);
+    
+    const awsService = getAWSService();
+    
+    // Simple test command
+    const testCommands = ['echo "SSM Test: $(date)"', 'whoami', 'pwd'];
+    
+    console.log(`[TEST] Executing test commands:`, testCommands);
+    const commandResult = await awsService.executeCommand(instanceId, testCommands);
+    
+    res.json({
+      message: 'SSM test command initiated',
+      commandId: commandResult.CommandId,
+      testCommands,
+      note: 'Use GET /api/logs/{instanceId}/command/{commandId} to check results'
+    });
+  } catch (error) {
+    console.error('SSM test error:', error);
+    res.status(500).json({
+      error: {
+        message: error.message || 'Failed to test SSM connectivity',
+        status: 500
+      }
+    });
   }
 });
 

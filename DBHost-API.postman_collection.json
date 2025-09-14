@@ -599,6 +599,58 @@
 					"response": []
 				},
 				{
+					"name": "Check SSM Agent Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/ssm-status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"ssm-status"
+							]
+						},
+						"description": "Quick check of SSM agent registration status without waiting."
+					},
+					"response": []
+				},
+				{
+					"name": "Test SSM Connectivity",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/test-ssm",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"test-ssm"
+							]
+						},
+						"description": "Test SSM connectivity by executing simple commands."
+					},
+					"response": []
+				},
+				{
 					"name": "Execute Custom Database Command",
 					"request": {
 						"method": "POST",

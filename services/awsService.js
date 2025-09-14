@@ -48,14 +48,48 @@ echo "$(date): Starting instance setup" >> /var/log/dbhost/install.log
 `;
 
     // -----------------------------
-    // Install SSM Agent for Ubuntu 24.04
+    // Install SSM Agent for Ubuntu 24.04 (Multiple Methods)
     // -----------------------------
     const ssmScript = `
-echo "$(date): Installing Amazon SSM Agent" >> /var/log/dbhost/install.log
-snap install amazon-ssm-agent --classic
-systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
-systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
-echo "$(date): SSM Agent installed" >> /var/log/dbhost/install.log
+echo "$(date): Starting Amazon SSM Agent installation" >> /var/log/dbhost/install.log
+
+# Method 1: Try snap installation (preferred for Ubuntu 24.04)
+echo "$(date): Attempting snap installation..." >> /var/log/dbhost/install.log
+if snap install amazon-ssm-agent --classic; then
+    echo "$(date): Snap installation successful" >> /var/log/dbhost/install.log
+    systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+    systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+    sleep 5
+    systemctl status snap.amazon-ssm-agent.amazon-ssm-agent.service >> /var/log/dbhost/install.log 2>&1
+else
+    echo "$(date): Snap installation failed, trying manual installation..." >> /var/log/dbhost/install.log
+    
+    # Method 2: Manual installation
+    cd /tmp
+    wget -q https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+    dpkg -i amazon-ssm-agent.deb
+    
+    # Enable and start the service
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+    sleep 5
+    systemctl status amazon-ssm-agent >> /var/log/dbhost/install.log 2>&1
+fi
+
+# Force registration with SSM
+echo "$(date): Forcing SSM agent registration..." >> /var/log/dbhost/install.log
+/usr/bin/amazon-ssm-agent -register -code "activation-code" -id "activation-id" -region "${this.region}" || true
+
+# Restart SSM agent to ensure proper registration
+echo "$(date): Restarting SSM agent..." >> /var/log/dbhost/install.log
+systemctl restart snap.amazon-ssm-agent.amazon-ssm-agent.service || systemctl restart amazon-ssm-agent
+sleep 10
+
+# Final status check
+echo "$(date): Final SSM agent status check..." >> /var/log/dbhost/install.log
+systemctl is-active snap.amazon-ssm-agent.amazon-ssm-agent.service >> /var/log/dbhost/install.log 2>&1 || systemctl is-active amazon-ssm-agent >> /var/log/dbhost/install.log 2>&1
+
+echo "$(date): SSM Agent installation completed" >> /var/log/dbhost/install.log
 `;
 
     if (databaseType === 'postgresql') {
@@ -178,6 +212,9 @@ echo "$(date): MySQL installation completed" >> /var/log/dbhost/install.log
       SecurityGroupIds: [securityGroupId],
       SubnetId: subnetId,
       UserData: Buffer.from(userData).toString('base64'),
+      IamInstanceProfile: {
+        Name: 'EC2-SSM-Role' // IAM role with SSM permissions - must be created manually
+      },
       TagSpecifications: [
         {
           ResourceType: 'instance',
@@ -244,32 +281,121 @@ echo "$(date): MySQL installation completed" >> /var/log/dbhost/install.log
   // -----------------------------
   // Wait until SSM agent is ready
   // -----------------------------
-  async waitForSsmInstance(instanceId, maxAttempts = 20, delayMs = 15000) {
+  async waitForSsmInstance(instanceId, maxAttempts = 40, delayMs = 10000) {
+    console.log(`[SSM] Waiting for SSM agent on instance ${instanceId} (max ${maxAttempts} attempts, ${delayMs/1000}s intervals)`);
     let attempt = 0;
+    
     while (attempt < maxAttempts) {
-      const resp = await this.ssmClient.send(new DescribeInstanceInformationCommand({}));
-      const found = resp.InstanceInformationList.some(info => info.InstanceId === instanceId);
-      if (found) return true;
-      attempt++;
-      await new Promise(r => setTimeout(r, delayMs));
+      try {
+        console.log(`[SSM] Attempt ${attempt + 1}/${maxAttempts} - Checking SSM agent status...`);
+        
+        // Use pagination to handle large numbers of instances
+        const resp = await this.ssmClient.send(new DescribeInstanceInformationCommand({
+          MaxResults: 50,
+          Filters: [
+            {
+              Key: 'InstanceIds',
+              Values: [instanceId]
+            }
+          ]
+        }));
+        
+        console.log(`[SSM] SSM query returned ${resp.InstanceInformationList.length} results for instance ${instanceId}`);
+        
+        if (resp.InstanceInformationList.length > 0) {
+          const instance = resp.InstanceInformationList[0];
+          console.log(`[SSM] Instance ${instanceId} found in SSM!`);
+          console.log(`[SSM] - Ping Status: ${instance.PingStatus}`);
+          console.log(`[SSM] - Agent Version: ${instance.AgentVersion}`);
+          console.log(`[SSM] - Platform: ${instance.PlatformName} ${instance.PlatformVersion}`);
+          console.log(`[SSM] - Last Ping: ${instance.LastPingDateTime}`);
+          
+          if (instance.PingStatus === 'Online') {
+            console.log(`[SSM] Instance ${instanceId} is online and ready!`);
+            return true;
+          } else {
+            console.log(`[SSM] Instance ${instanceId} found but not online yet (Status: ${instance.PingStatus})`);
+          }
+        } else {
+          console.log(`[SSM] Instance ${instanceId} not yet registered with SSM`);
+        }
+        
+        attempt++;
+        if (attempt < maxAttempts) {
+          console.log(`[SSM] Waiting ${delayMs/1000}s before next attempt...`);
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+      } catch (error) {
+        console.error(`[SSM] Error checking SSM status (attempt ${attempt + 1}):`, error.message);
+        console.error(`[SSM] Error code: ${error.name}`);
+        attempt++;
+        if (attempt < maxAttempts) {
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
     }
-    throw new Error(`SSM agent not ready on instance ${instanceId} after ${maxAttempts} attempts`);
+    
+    // Final attempt to get more detailed error information
+    try {
+      console.log(`[SSM] Final check - getting all SSM instances for debugging...`);
+      const allInstances = await this.ssmClient.send(new DescribeInstanceInformationCommand({}));
+      console.log(`[SSM] Total SSM-registered instances: ${allInstances.InstanceInformationList.length}`);
+      allInstances.InstanceInformationList.forEach(inst => {
+        console.log(`[SSM] - ${inst.InstanceId}: ${inst.PingStatus} (${inst.PlatformName})`);
+      });
+    } catch (debugError) {
+      console.error(`[SSM] Could not get debug information:`, debugError.message);
+    }
+    
+    throw new Error(`SSM agent not ready on instance ${instanceId} after ${maxAttempts} attempts (${maxAttempts * delayMs / 1000 / 60} minutes). Check: 1) IAM instance profile 'EC2-SSM-Role' exists, 2) Instance has internet access, 3) SSM agent is installed and running.`);
   }
 
   async executeCommand(instanceId, commands) {
-    await this.waitForSsmInstance(instanceId);
+    try {
+      console.log(`[SSM] Starting command execution for instance: ${instanceId}`);
+      console.log(`[SSM] Commands to execute:`, commands);
+      
+      // First check if instance is running
+      console.log(`[SSM] Checking if instance is running...`);
+      const instanceDetails = await this.getInstanceDetails(instanceId);
+      if (instanceDetails.length === 0) {
+        throw new Error(`Instance ${instanceId} not found`);
+      }
+      
+      const instance = instanceDetails[0];
+      console.log(`[SSM] Instance state: ${instance.state}`);
+      
+      if (instance.state !== 'running') {
+        throw new Error(`Instance ${instanceId} is not running (current state: ${instance.state})`);
+      }
+      
+      console.log(`[SSM] Waiting for SSM agent to be ready...`);
+      await this.waitForSsmInstance(instanceId);
+      console.log(`[SSM] SSM agent is ready for instance: ${instanceId}`);
 
-    const cmd = new SendCommandCommand({
-      InstanceIds: [instanceId],
-      DocumentName: 'AWS-RunShellScript',
-      Parameters: { commands: Array.isArray(commands) ? commands : [commands] },
-      TimeoutSeconds: 120, // 5 minute timeout
-      Comment: `DBHost command execution - ${new Date().toISOString()}`
-    });
+      const cmd = new SendCommandCommand({
+        InstanceIds: [instanceId],
+        DocumentName: 'AWS-RunShellScript',
+        Parameters: { commands: Array.isArray(commands) ? commands : [commands] },
+        TimeoutSeconds: 300, // 5 minute timeout
+        Comment: `DBHost command execution - ${new Date().toISOString()}`
+      });
 
-    const result = await this.ssmClient.send(cmd);
-    console.log(`SSM Command initiated: ${result.Command.CommandId} for instance ${instanceId}`);
-    return result.Command;
+      console.log(`[SSM] Sending command to AWS SSM...`);
+      const result = await this.ssmClient.send(cmd);
+      console.log(`[SSM] Command sent successfully! CommandId: ${result.Command.CommandId}`);
+      console.log(`[SSM] Command Status: ${result.Command.Status}`);
+      
+      return result.Command;
+    } catch (error) {
+      console.error(`[SSM] Error executing command on instance ${instanceId}:`, error);
+      console.error(`[SSM] Error details:`, {
+        message: error.message,
+        code: error.name,
+        statusCode: error.$metadata?.httpStatusCode
+      });
+      throw error;
+    }
   }
 
   async getCommandResult(commandId, instanceId) {

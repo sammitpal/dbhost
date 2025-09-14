@@ -25,6 +25,7 @@ A comprehensive SaaS platform for instantly deploying managed PostgreSQL and MyS
 - Pre-configured infrastructure in ap-south-1:
   - VPC and Subnet
   - EC2 Key Pair for instance access
+  - **IAM Instance Profile**: `EC2-SSM-Role` with SSM permissions
   - Appropriate IAM roles and permissions
 
 **Note**: End users don't need any AWS knowledge or setup - this is handled by the service provider.
@@ -746,6 +747,8 @@ await connection.end();
 
 ## AWS Permissions Required
 
+### Service Owner API Permissions
+
 Your AWS user/role needs the following permissions:
 
 ```json
@@ -784,6 +787,38 @@ Your AWS user/role needs the following permissions:
         "logs:PutLogEvents",
         "logs:DescribeLogStreams",
         "logs:GetLogEvents"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### EC2 Instance Profile (EC2-SSM-Role)
+
+Create an IAM role named `EC2-SSM-Role` with the following managed policies:
+- `AmazonSSMManagedInstanceCore`
+- `CloudWatchAgentServerPolicy`
+
+Or use this custom policy:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel",
+        "ec2messages:AcknowledgeMessage",
+        "ec2messages:DeleteMessage",
+        "ec2messages:FailMessage",
+        "ec2messages:GetEndpoint",
+        "ec2messages:GetMessages",
+        "ec2messages:SendReply"
       ],
       "Resource": "*"
     }
@@ -830,10 +865,12 @@ The application provides comprehensive logging:
    - Verify security group allows database port
    - Check database service status in logs
 
-4. **SSM commands fail**
-   - Ensure EC2 instance has SSM agent installed
-   - Verify IAM role for EC2 includes SSM permissions
-   - Check instance is registered with SSM
+4. **SSM commands fail or timeout**
+   - Ensure EC2 instance has SSM agent installed (Ubuntu: `snap install amazon-ssm-agent --classic`)
+   - Verify IAM instance profile `EC2-SSM-Role` exists with SSM permissions
+   - Check instance is registered with SSM: `aws ssm describe-instance-information`
+   - Test SSM connectivity: `POST /api/database/{instanceId}/test-ssm`
+   - Wait 5-10 minutes after instance launch for SSM agent to register
 
 ### Getting Help
 
