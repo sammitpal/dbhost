@@ -1,346 +1,269 @@
-const { EC2Client, RunInstancesCommand, DescribeInstancesCommand, StartInstancesCommand, StopInstancesCommand, TerminateInstancesCommand, CreateSecurityGroupCommand, AuthorizeSecurityGroupIngressCommand, DescribeSecurityGroupsCommand } = require('@aws-sdk/client-ec2');
-const { SSMClient, SendCommandCommand, GetCommandInvocationCommand } = require('@aws-sdk/client-ssm');
-const { CloudWatchLogsClient, CreateLogGroupCommand, DescribeLogStreamsCommand, GetLogEventsCommand } = require('@aws-sdk/client-cloudwatch-logs');
+const {
+  EC2Client,
+  RunInstancesCommand,
+  DescribeInstancesCommand,
+  StartInstancesCommand,
+  StopInstancesCommand,
+  TerminateInstancesCommand,
+  CreateSecurityGroupCommand,
+  AuthorizeSecurityGroupIngressCommand,
+} = require('@aws-sdk/client-ec2');
+const {
+  SSMClient,
+  SendCommandCommand,
+  GetCommandInvocationCommand,
+  DescribeInstanceInformationCommand,
+} = require('@aws-sdk/client-ssm');
+const {
+  CloudWatchLogsClient,
+  GetLogEventsCommand,
+} = require('@aws-sdk/client-cloudwatch-logs');
 
 class AWSService {
-  constructor(accessKeyId, secretAccessKey, region = 'us-east-1') {
+  constructor(accessKeyId, secretAccessKey, region = 'ap-south-1') {
     this.region = region;
     this.ec2Client = new EC2Client({
       region,
-      credentials: {
-        accessKeyId,
-        secretAccessKey
-      }
+      credentials: { accessKeyId, secretAccessKey },
     });
-    
     this.ssmClient = new SSMClient({
       region,
-      credentials: {
-        accessKeyId,
-        secretAccessKey
-      }
+      credentials: { accessKeyId, secretAccessKey },
     });
-    
     this.logsClient = new CloudWatchLogsClient({
       region,
-      credentials: {
-        accessKeyId,
-        secretAccessKey
-      }
+      credentials: { accessKeyId, secretAccessKey },
     });
   }
 
-  // Generate user data script for database installation
+  /**
+   * Generate EC2 user-data script
+   * databaseType: 'postgresql' | 'mysql'
+   */
   generateUserData(databaseType, databaseVersion, masterUsername, masterPassword, databasePort) {
     const baseScript = `#!/bin/bash
-yum update -y
-yum install -y amazon-cloudwatch-agent
-
-# Install CloudWatch agent
-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c ssm:AmazonCloudWatch-linux
-
-# Create log directory
+set -e
 mkdir -p /var/log/dbhost
-echo "$(date): Starting database installation" >> /var/log/dbhost/install.log
+echo "$(date): Starting instance setup" >> /var/log/dbhost/install.log
+`;
+
+    // -----------------------------
+    // Install SSM Agent for Ubuntu 24.04
+    // -----------------------------
+    const ssmScript = `
+echo "$(date): Installing Amazon SSM Agent" >> /var/log/dbhost/install.log
+snap install amazon-ssm-agent --classic
+systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+echo "$(date): SSM Agent installed" >> /var/log/dbhost/install.log
 `;
 
     if (databaseType === 'postgresql') {
-      return baseScript + `
-# Install PostgreSQL
-amazon-linux-extras install postgresql${databaseVersion} -y
-yum install -y postgresql-server postgresql-contrib
+      return baseScript + ssmScript + `
+echo "$(date): Installing PostgreSQL" >> /var/log/dbhost/install.log
+apt-get update -y
+DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-contrib
 
-# Initialize database
-postgresql-setup initdb
 systemctl enable postgresql
 systemctl start postgresql
 
-# Configure PostgreSQL
+# Set postgres password
 sudo -u postgres psql -c "ALTER USER postgres PASSWORD '${masterPassword}';"
-sudo -u postgres createuser --createdb --pwprompt ${masterUsername} || true
+
+# Create application user
+sudo -u postgres createuser --createdb ${masterUsername} || true
 sudo -u postgres psql -c "ALTER USER ${masterUsername} PASSWORD '${masterPassword}';"
 
-# Configure pg_hba.conf for remote connections
-sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" /var/lib/pgsql/data/postgresql.conf
-echo "host all all 0.0.0.0/0 md5" >> /var/lib/pgsql/data/pg_hba.conf
-sed -i "s/port = 5432/port = ${databasePort}/" /var/lib/pgsql/data/postgresql.conf
+# Allow remote connections
+sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" /etc/postgresql/*/main/postgresql.conf
+echo "host all all 0.0.0.0/0 md5" >> /etc/postgresql/*/main/pg_hba.conf
+sed -i "s/^port = 5432/port = ${databasePort}/" /etc/postgresql/*/main/postgresql.conf
 
-# Restart PostgreSQL
 systemctl restart postgresql
-
 echo "$(date): PostgreSQL installation completed" >> /var/log/dbhost/install.log
 `;
-    } else if (databaseType === 'mysql') {
-      return baseScript + `
-# Install MySQL
-yum install -y mysql-server
-
-# Start MySQL
-systemctl enable mysqld
-systemctl start mysqld
-
-# Get temporary password
-TEMP_PASSWORD=$(grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}')
-
-# Configure MySQL
-mysql -u root -p"$TEMP_PASSWORD" --connect-expired-password -e "
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${masterPassword}';
-CREATE USER '${masterUsername}'@'%' IDENTIFIED BY '${masterPassword}';
-GRANT ALL PRIVILEGES ON *.* TO '${masterUsername}'@'%' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
-"
-
-# Configure MySQL for remote connections
-sed -i "s/bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
-sed -i "s/port.*/port = ${databasePort}/" /etc/mysql/mysql.conf.d/mysqld.cnf
-
-# Restart MySQL
-systemctl restart mysqld
-
-echo "$(date): MySQL installation completed" >> /var/log/dbhost/install.log
-`;
     }
+
+    // You can add MySQL support if needed
+    throw new Error(`Unsupported database type: ${databaseType}`);
   }
 
-  // Create security group for database access
   async createSecurityGroup(vpcId, databaseType, databasePort) {
-    try {
-      const groupName = `dbhost-${databaseType}-${Date.now()}`;
-      const description = `Security group for ${databaseType} database`;
+    const groupName = `dbhost-${databaseType}-${Date.now()}`;
+    const createSgCommand = new CreateSecurityGroupCommand({
+      GroupName: groupName,
+      Description: `Security group for ${databaseType} database`,
+      VpcId: vpcId,
+    });
+    const sgResult = await this.ec2Client.send(createSgCommand);
+    const securityGroupId = sgResult.GroupId;
 
-      // Create security group
-      const createSgCommand = new CreateSecurityGroupCommand({
-        GroupName: groupName,
-        Description: description,
-        VpcId: vpcId
-      });
+    const rules = [
+      {
+        IpProtocol: 'tcp', FromPort: 22, ToPort: 22,
+        IpRanges: [{ CidrIp: '0.0.0.0/0', Description: 'SSH access' }]
+      },
+      {
+        IpProtocol: 'tcp', FromPort: databasePort, ToPort: databasePort,
+        IpRanges: [{ CidrIp: '0.0.0.0/0', Description: `${databaseType} access` }]
+      },
+    ];
 
-      const sgResult = await this.ec2Client.send(createSgCommand);
-      const securityGroupId = sgResult.GroupId;
-
-      // Add inbound rules
-      const rules = [
-        {
-          IpProtocol: 'tcp',
-          FromPort: 22,
-          ToPort: 22,
-          IpRanges: [{ CidrIp: '0.0.0.0/0', Description: 'SSH access' }]
-        },
-        {
-          IpProtocol: 'tcp',
-          FromPort: databasePort,
-          ToPort: databasePort,
-          IpRanges: [{ CidrIp: '0.0.0.0/0', Description: `${databaseType} access` }]
-        }
-      ];
-
-      const authorizeCommand = new AuthorizeSecurityGroupIngressCommand({
+    await this.ec2Client.send(
+      new AuthorizeSecurityGroupIngressCommand({
         GroupId: securityGroupId,
-        IpPermissions: rules
-      });
-
-      await this.ec2Client.send(authorizeCommand);
-
-      return securityGroupId;
-    } catch (error) {
-      console.error('Error creating security group:', error);
-      throw error;
-    }
+        IpPermissions: rules,
+      })
+    );
+    return securityGroupId;
   }
 
-  // Launch EC2 instance
   async launchInstance(params) {
-    try {
-      const {
-        name,
-        instanceType = 't3.micro',
-        keyPairName,
-        vpcId,
-        subnetId,
-        databaseType,
-        databaseVersion,
-        databasePort,
-        masterUsername,
-        masterPassword
-      } = params;
+    const {
+      name,
+      instanceType = 't3.micro',
+      keyPairName,
+      vpcId,
+      subnetId,
+      databaseType,
+      databaseVersion,
+      databasePort,
+      masterUsername,
+      masterPassword,
+    } = params;
 
-      // Create security group
-      const securityGroupId = await this.createSecurityGroup(vpcId, databaseType, databasePort);
+    const securityGroupId = await this.createSecurityGroup(
+      vpcId,
+      databaseType,
+      databasePort
+    );
 
-      // Generate user data
-      const userData = this.generateUserData(databaseType, databaseVersion, masterUsername, masterPassword, databasePort);
+    const userData = this.generateUserData(
+      databaseType,
+      databaseVersion,
+      masterUsername,
+      masterPassword,
+      databasePort
+    );
 
-      // Launch instance
-      const runCommand = new RunInstancesCommand({
-        ImageId: 'ami-0c02fb55956c7d316', // Amazon Linux 2 AMI
-        InstanceType: instanceType,
-        KeyName: keyPairName,
-        MinCount: 1,
-        MaxCount: 1,
-        SecurityGroupIds: [securityGroupId],
-        SubnetId: subnetId,
-        UserData: Buffer.from(userData).toString('base64'),
-        TagSpecifications: [
-          {
-            ResourceType: 'instance',
-            Tags: [
-              { Key: 'Name', Value: name },
-              { Key: 'DatabaseType', Value: databaseType },
-              { Key: 'ManagedBy', Value: 'DBHost' }
-            ]
-          }
-        ],
-        IamInstanceProfile: {
-          Name: 'EC2-CloudWatchAgent-Role' // Ensure this role exists
-        }
-      });
+    const runCommand = new RunInstancesCommand({
+      ImageId: 'ami-02d26659fd82cf299', // Ubuntu 24.04 AMI
+      InstanceType: instanceType,
+      KeyName: keyPairName,
+      MinCount: 1,
+      MaxCount: 1,
+      SecurityGroupIds: [securityGroupId],
+      SubnetId: subnetId,
+      UserData: Buffer.from(userData).toString('base64'),
+      TagSpecifications: [
+        {
+          ResourceType: 'instance',
+          Tags: [
+            { Key: 'Name', Value: name },
+            { Key: 'DatabaseType', Value: databaseType },
+            { Key: 'ManagedBy', Value: 'DBHost' },
+          ],
+        },
+      ],
+    });
 
-      const result = await this.ec2Client.send(runCommand);
-      const instance = result.Instances[0];
-
-      return {
-        instanceId: instance.InstanceId,
-        securityGroupId,
-        userData
-      };
-    } catch (error) {
-      console.error('Error launching instance:', error);
-      throw error;
-    }
+    const result = await this.ec2Client.send(runCommand);
+    return {
+      instanceId: result.Instances[0].InstanceId,
+      securityGroupId,
+      userData,
+    };
   }
 
-  // Get instance details
   async getInstanceDetails(instanceIds) {
-    try {
-      const command = new DescribeInstancesCommand({
-        InstanceIds: Array.isArray(instanceIds) ? instanceIds : [instanceIds]
-      });
-
-      const result = await this.ec2Client.send(command);
-      const instances = [];
-
-      result.Reservations.forEach(reservation => {
-        reservation.Instances.forEach(instance => {
-          instances.push({
-            instanceId: instance.InstanceId,
-            state: instance.State.Name,
-            instanceType: instance.InstanceType,
-            publicIpAddress: instance.PublicIpAddress,
-            privateIpAddress: instance.PrivateIpAddress,
-            launchTime: instance.LaunchTime,
-            vpcId: instance.VpcId,
-            subnetId: instance.SubnetId,
-            securityGroups: instance.SecurityGroups,
-            tags: instance.Tags || []
-          });
-        });
-      });
-
-      return instances;
-    } catch (error) {
-      console.error('Error getting instance details:', error);
-      throw error;
-    }
+    const command = new DescribeInstancesCommand({
+      InstanceIds: Array.isArray(instanceIds) ? instanceIds : [instanceIds],
+    });
+    const result = await this.ec2Client.send(command);
+    const instances = [];
+    result.Reservations.forEach(r =>
+      r.Instances.forEach(i =>
+        instances.push({
+          instanceId: i.InstanceId,
+          state: i.State.Name,
+          instanceType: i.InstanceType,
+          publicIpAddress: i.PublicIpAddress,
+          privateIpAddress: i.PrivateIpAddress,
+          launchTime: i.LaunchTime,
+          vpcId: i.VpcId,
+          subnetId: i.SubnetId,
+          securityGroups: i.SecurityGroups,
+          tags: i.Tags || [],
+        })
+      )
+    );
+    return instances;
   }
 
-  // Start instance
-  async startInstance(instanceId) {
-    try {
-      const command = new StartInstancesCommand({
-        InstanceIds: [instanceId]
-      });
-
-      const result = await this.ec2Client.send(command);
-      return result.StartingInstances[0];
-    } catch (error) {
-      console.error('Error starting instance:', error);
-      throw error;
-    }
+  async startInstance(id) {
+    return (
+      await this.ec2Client.send(new StartInstancesCommand({ InstanceIds: [id] }))
+    ).StartingInstances[0];
   }
 
-  // Stop instance
-  async stopInstance(instanceId) {
-    try {
-      const command = new StopInstancesCommand({
-        InstanceIds: [instanceId]
-      });
-
-      const result = await this.ec2Client.send(command);
-      return result.StoppingInstances[0];
-    } catch (error) {
-      console.error('Error stopping instance:', error);
-      throw error;
-    }
+  async stopInstance(id) {
+    return (
+      await this.ec2Client.send(new StopInstancesCommand({ InstanceIds: [id] }))
+    ).StoppingInstances[0];
   }
 
-  // Terminate instance
-  async terminateInstance(instanceId) {
-    try {
-      const command = new TerminateInstancesCommand({
-        InstanceIds: [instanceId]
-      });
-
-      const result = await this.ec2Client.send(command);
-      return result.TerminatingInstances[0];
-    } catch (error) {
-      console.error('Error terminating instance:', error);
-      throw error;
-    }
+  async terminateInstance(id) {
+    return (
+      await this.ec2Client.send(new TerminateInstancesCommand({ InstanceIds: [id] }))
+    ).TerminatingInstances[0];
   }
 
-  // Execute command on instance via SSM
+  // -----------------------------
+  // Wait until SSM agent is ready
+  // -----------------------------
+  async waitForSsmInstance(instanceId, maxAttempts = 20, delayMs = 15000) {
+    let attempt = 0;
+    while (attempt < maxAttempts) {
+      const resp = await this.ssmClient.send(new DescribeInstanceInformationCommand({}));
+      const found = resp.InstanceInformationList.some(info => info.InstanceId === instanceId);
+      if (found) return true;
+      attempt++;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+    throw new Error(`SSM agent not ready on instance ${instanceId} after ${maxAttempts} attempts`);
+  }
+
   async executeCommand(instanceId, commands) {
-    try {
-      const command = new SendCommandCommand({
-        InstanceIds: [instanceId],
-        DocumentName: 'AWS-RunShellScript',
-        Parameters: {
-          commands: Array.isArray(commands) ? commands : [commands]
-        }
-      });
+    await this.waitForSsmInstance(instanceId);
 
-      const result = await this.ssmClient.send(command);
-      return result.Command;
-    } catch (error) {
-      console.error('Error executing command:', error);
-      throw error;
-    }
+    const cmd = new SendCommandCommand({
+      InstanceIds: [instanceId],
+      DocumentName: 'AWS-RunShellScript',
+      Parameters: { commands: Array.isArray(commands) ? commands : [commands] },
+    });
+
+    return (await this.ssmClient.send(cmd)).Command;
   }
 
-  // Get command execution result
   async getCommandResult(commandId, instanceId) {
-    try {
-      const command = new GetCommandInvocationCommand({
-        CommandId: commandId,
-        InstanceId: instanceId
-      });
-
-      const result = await this.ssmClient.send(command);
-      return result;
-    } catch (error) {
-      console.error('Error getting command result:', error);
-      throw error;
-    }
+    return await this.ssmClient.send(
+      new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId })
+    );
   }
 
-  // Get logs from CloudWatch
   async getLogs(logGroupName, logStreamName, startTime, endTime) {
-    try {
-      const command = new GetLogEventsCommand({
-        logGroupName,
-        logStreamName,
-        startTime,
-        endTime,
-        limit: 100
-      });
-
-      const result = await this.logsClient.send(command);
-      return result.events;
-    } catch (error) {
-      console.error('Error getting logs:', error);
-      throw error;
-    }
+    return (
+      await this.logsClient.send(
+        new GetLogEventsCommand({
+          logGroupName,
+          logStreamName,
+          startTime,
+          endTime,
+          limit: 100,
+        })
+      )
+    ).events;
   }
 }
 
-module.exports = AWSService; 
+module.exports = AWSService;
