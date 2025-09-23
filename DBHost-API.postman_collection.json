@@ -1,0 +1,968 @@
+{
+	"info": {
+		"_postman_id": "dbhost-api-collection",
+		"name": "DBHost - Database-as-a-Service API",
+		"description": "Complete API collection for DBHost SaaS platform. Users can create, manage, and scale PostgreSQL/MySQL databases without any AWS knowledge.\n\n**Setup Instructions:**\n1. Import this collection into Postman\n2. Set environment variables: `baseUrl` and `authToken`\n3. Start with Authentication → Register/Login\n4. Use the returned JWT token for authenticated requests\n\n**Environment Variables:**\n- `baseUrl`: http://localhost:3000\n- `authToken`: JWT token from login response",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Register User",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const response = pm.response.json();",
+									"    if (response.token) {",
+									"        pm.environment.set('authToken', response.token);",
+									"        console.log('JWT Token saved to environment');",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"johndoe\",\n  \"email\": \"john@example.com\",\n  \"password\": \"SecurePass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/register",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"register"
+							]
+						},
+						"description": "Register a new user account. Only requires username, email, and password - no AWS knowledge needed."
+					},
+					"response": []
+				},
+				{
+					"name": "Login User",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.token) {",
+									"        pm.environment.set('authToken', response.token);",
+									"        console.log('JWT Token saved to environment');",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"john@example.com\",\n  \"password\": \"SecurePass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/login",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"login"
+							]
+						},
+						"description": "Login with email and password to get JWT token for authenticated requests."
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Profile",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/profile",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"profile"
+							]
+						},
+						"description": "Get current user profile information."
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Profile",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"johnsmith\",\n  \"email\": \"johnsmith@example.com\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/profile",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"profile"
+							]
+						},
+						"description": "Update user profile information (username, email)."
+					},
+					"response": []
+				},
+				{
+					"name": "Change Password",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"currentPassword\": \"SecurePass123!\",\n  \"newPassword\": \"NewSecurePass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/change-password",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"change-password"
+							]
+						},
+						"description": "Change user password with current password verification."
+					},
+					"response": []
+				}
+			],
+			"description": "User authentication endpoints for registration, login, and profile management."
+		},
+		{
+			"name": "Database Instance Management",
+			"item": [
+				{
+					"name": "Create Database Instance",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const response = pm.response.json();",
+									"    if (response.instance && response.instance.instanceId) {",
+									"        pm.environment.set('instanceId', response.instance.instanceId);",
+									"        console.log('Instance ID saved:', response.instance.instanceId);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"my-database-server\",\n  \"databaseType\": \"postgresql\",\n  \"databaseVersion\": \"13\",\n  \"instanceType\": \"t3.micro\",\n  \"masterUsername\": \"dbadmin\",\n  \"masterPassword\": \"SecureDBPass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/create",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"create"
+							]
+						},
+						"description": "Create a new database instance. Infrastructure (VPC, subnet, security groups) is automatically managed.\n\n**User Provides**: Database name, type, version, size, and master credentials\n**Automatically Handled**: AWS infrastructure, networking, security groups, region selection"
+					},
+					"response": []
+				},
+				{
+					"name": "List All Instances",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/list",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"list"
+							]
+						},
+						"description": "List all database instances for the current user."
+					},
+					"response": []
+				},
+				{
+					"name": "List Instances with Filters",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/list?status=running&databaseType=postgresql",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"list"
+							],
+							"query": [
+								{
+									"key": "status",
+									"value": "running"
+								},
+								{
+									"key": "databaseType",
+									"value": "postgresql"
+								}
+							]
+						},
+						"description": "List instances with filters for status and database type."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Instance Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/{{instanceId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"{{instanceId}}"
+							]
+						},
+						"description": "Get detailed information about a specific database instance including real-time AWS status."
+					},
+					"response": []
+				},
+				{
+					"name": "Start Instance",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/{{instanceId}}/start",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"{{instanceId}}",
+								"start"
+							]
+						},
+						"description": "Start a stopped database instance."
+					},
+					"response": []
+				},
+				{
+					"name": "Stop Instance",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/{{instanceId}}/stop",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"{{instanceId}}",
+								"stop"
+							]
+						},
+						"description": "Stop a running database instance."
+					},
+					"response": []
+				},
+				{
+					"name": "Terminate Instance",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/{{instanceId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"{{instanceId}}"
+							]
+						},
+						"description": "Permanently terminate a database instance. **Warning**: This action cannot be undone!"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Network Configuration",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"ports\": [\n    {\n      \"port\": 8080,\n      \"protocol\": \"tcp\",\n      \"description\": \"Custom application port\"\n    },\n    {\n      \"port\": 3000,\n      \"protocol\": \"tcp\",\n      \"description\": \"API port\"\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/ec2/{{instanceId}}/network",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"ec2",
+								"{{instanceId}}",
+								"network"
+							]
+						},
+						"description": "Update network configuration for additional ports and protocols."
+					},
+					"response": []
+				}
+			],
+			"description": "Database instance lifecycle management - create, list, control, and configure instances."
+		},
+		{
+			"name": "Database User Management",
+			"item": [
+				{
+					"name": "Create Database User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"appuser\",\n  \"password\": \"UserPass123!\",\n  \"privileges\": [\"SELECT\", \"INSERT\", \"UPDATE\", \"DELETE\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/users",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"users"
+							]
+						},
+						"description": "Create a new database user with specific privileges on the database instance."
+					},
+					"response": []
+				},
+				{
+					"name": "List Database Users",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/users",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"users"
+							]
+						},
+						"description": "List all database users for the specified instance."
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Privileges",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"privileges\": [\"SELECT\", \"INSERT\"],\n  \"password\": \"NewUserPass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/users/appuser",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"users",
+								"appuser"
+							]
+						},
+						"description": "Update database user privileges and/or password."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Database User",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/users/appuser",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"users",
+								"appuser"
+							]
+						},
+						"description": "Delete a database user. Cannot delete the master user."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Connection Information",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/connection",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"connection"
+							]
+						},
+						"description": "Get database connection information including host, port, connection strings, and available users."
+					},
+					"response": []
+				},
+				{
+					"name": "Check SSM Agent Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/ssm-status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"ssm-status"
+							]
+						},
+						"description": "Quick check of SSM agent registration status without waiting."
+					},
+					"response": []
+				},
+				{
+					"name": "Test SSM Connectivity",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/test-ssm",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"test-ssm"
+							]
+						},
+						"description": "Test SSM connectivity by executing simple commands."
+					},
+					"response": []
+				},
+				{
+					"name": "Execute Custom Database Command",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"command\": \"SELECT version();\",\n  \"database\": \"postgres\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/database/{{instanceId}}/execute",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"database",
+								"{{instanceId}}",
+								"execute"
+							]
+						},
+						"description": "Execute a custom SQL command on the database instance."
+					},
+					"response": []
+				}
+			],
+			"description": "Database user management - create users, manage privileges, and execute custom commands."
+		},
+		{
+			"name": "Log Management",
+			"item": [
+				{
+					"name": "Get Instance Logs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}"
+							]
+						},
+						"description": "Get recent logs for the database instance from CloudWatch or SSM."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Logs with Time Filter",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}?startTime=2023-01-01T00:00:00Z&limit=100",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}"
+							],
+							"query": [
+								{
+									"key": "startTime",
+									"value": "2023-01-01T00:00:00Z"
+								},
+								{
+									"key": "limit",
+									"value": "100"
+								}
+							]
+						},
+						"description": "Get logs with time filtering and limit."
+					},
+					"response": []
+				},
+				{
+					"name": "Check Command Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}/command/{{commandId}}/status",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}",
+								"command",
+								"{{commandId}}",
+								"status"
+							]
+						},
+						"description": "Quick check of command execution status without full output."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Command Execution Result",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}/command/{{commandId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}",
+								"command",
+								"{{commandId}}"
+							]
+						},
+						"description": "Get the full result of a previously executed SSM command including output and errors."
+					},
+					"response": []
+				},
+				{
+					"name": "Start Real-time Log Streaming",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}/stream",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}",
+								"stream"
+							]
+						},
+						"description": "Start real-time log streaming via WebSocket. Connect to WebSocket to receive live logs."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Database Logs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}/database?lines=100",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}",
+								"database"
+							],
+							"query": [
+								{
+									"key": "lines",
+									"value": "100"
+								}
+							]
+						},
+						"description": "Get database-specific logs (PostgreSQL/MySQL logs, status, active connections)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get System Logs",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{authToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/logs/{{instanceId}}/system?lines=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"logs",
+								"{{instanceId}}",
+								"system"
+							],
+							"query": [
+								{
+									"key": "lines",
+									"value": "50"
+								}
+							]
+						},
+						"description": "Get system logs including installation logs, system status, disk usage, and memory usage."
+					},
+					"response": []
+				}
+			],
+			"description": "Log management and monitoring - view logs, stream real-time logs, and monitor system health."
+		},
+		{
+			"name": "Health Check",
+			"item": [
+				{
+					"name": "Server Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"health"
+							]
+						},
+						"description": "Check if the API server is running and healthy."
+					},
+					"response": []
+				}
+			],
+			"description": "Server health and status endpoints."
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000",
+			"type": "string"
+		},
+		{
+			"key": "authToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "instanceId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "commandId",
+			"value": "",
+			"type": "string"
+		}
+	]
+} 
